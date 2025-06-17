@@ -1,0 +1,14 @@
+x = 15
+y = 10
+z = 5
+if (x > y) then
+    if (z > 0) then
+        final = (x * y) + (z * 2)
+    else
+        final = (x + y) - z
+    endif
+else
+    final = y * 3
+endif
+
+output should be 15.
