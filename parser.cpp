@@ -1,381 +1,447 @@
 #include <iostream>
-#include <sstream>
-#include <stdexcept>
 #include <string>
-#include <unordered_map>
 #include <vector>
+#include <map>
 #include <memory>
-#include <cctype>
+#include <stdexcept>
 
-using namespace std;
-
-//-----------------//
-//   Tokenizer     //
-//-----------------//
-
+// Token types
 enum class TokenType
 {
-	IDENT,
 	NUMBER,
-	IF,
-	LBRACE,
-	RBRACE,
-	LPAREN,
-	RPAREN,
-	SEMICOLON,
+	IDENTIFIER,
 	PLUS,
 	MINUS,
-	EQUAL,
+	MULTIPLY,
+	DIVIDE,
+	ASSIGN,
+	IF,
+	THEN,
+	ELSE,
+	ENDIF,
+	LPAREN,
+	RPAREN,
 	END
 };
 
+// Token structure
 struct Token
 {
 	TokenType type;
-	string text;
-	int value; // for NUMBER tokens
+	std::string value;
+	int line;
+	int column;
 };
 
+// AST Node structure
+class ASTNode
+{
+public:
+	virtual ~ASTNode() = default;
+	virtual int evaluate() = 0;
+};
+
+// Number Node
+class NumberNode : public ASTNode
+{
+private:
+	int value;
+
+public:
+	NumberNode(int val) : value(val) {}
+	int evaluate() override { return value; }
+};
+
+// Variable Node
+class VariableNode : public ASTNode
+{
+private:
+	std::string name;
+	static std::map<std::string, int> variables;
+
+public:
+	VariableNode(const std::string &varName) : name(varName) {}
+	int evaluate() override
+	{
+		if (variables.find(name) == variables.end())
+		{
+			throw std::runtime_error("Undefined variable: " + name);
+		}
+		return variables[name];
+	}
+	static void setVariable(const std::string &name, int value)
+	{
+		variables[name] = value;
+	}
+};
+
+std::map<std::string, int> VariableNode::variables;
+
+// Binary Operation Node
+class BinaryOpNode : public ASTNode
+{
+private:
+	std::shared_ptr<ASTNode> left;
+	std::shared_ptr<ASTNode> right;
+	TokenType op;
+
+public:
+	BinaryOpNode(std::shared_ptr<ASTNode> l, TokenType operation, std::shared_ptr<ASTNode> r)
+		: left(l), op(operation), right(r) {}
+
+	int evaluate() override
+	{
+		int leftVal = left->evaluate();
+		int rightVal = right->evaluate();
+
+		switch (op)
+		{
+		case TokenType::PLUS:
+			return leftVal + rightVal;
+		case TokenType::MINUS:
+			return leftVal - rightVal;
+		case TokenType::MULTIPLY:
+			return leftVal * rightVal;
+		case TokenType::DIVIDE:
+			if (rightVal == 0)
+				throw std::runtime_error("Division by zero");
+			return leftVal / rightVal;
+		default:
+			throw std::runtime_error("Invalid operator");
+		}
+	}
+};
+
+// Assignment Node
+class AssignmentNode : public ASTNode
+{
+private:
+	std::string name;
+	std::shared_ptr<ASTNode> value;
+
+public:
+	AssignmentNode(const std::string &varName, std::shared_ptr<ASTNode> val)
+		: name(varName), value(val) {}
+
+	int evaluate() override
+	{
+		int val = value->evaluate();
+		VariableNode::setVariable(name, val);
+		return val;
+	}
+};
+
+// If Node
+class IfNode : public ASTNode
+{
+private:
+	std::shared_ptr<ASTNode> condition;
+	std::shared_ptr<ASTNode> thenBranch;
+	std::shared_ptr<ASTNode> elseBranch;
+
+public:
+	IfNode(std::shared_ptr<ASTNode> cond, std::shared_ptr<ASTNode> then, std::shared_ptr<ASTNode> else_)
+		: condition(cond), thenBranch(then), elseBranch(else_) {}
+
+	int evaluate() override
+	{
+		if (condition->evaluate() != 0)
+		{
+			return thenBranch->evaluate();
+		}
+		else if (elseBranch)
+		{
+			return elseBranch->evaluate();
+		}
+		return 0;
+	}
+};
+
+// Lexer class
 class Lexer
 {
-public:
-	Lexer(const string &input) : input(input), pos(0) {}
-
-	Token getNextToken()
-	{
-		skipWhitespace();
-		if (pos >= input.size())
-			return {TokenType::END, "", 0};
-
-		char currentChar = input[pos];
-
-		// Single-character tokens.
-		if (currentChar == '{')
-		{
-			pos++;
-			return {TokenType::LBRACE, "{", 0};
-		}
-		if (currentChar == '}')
-		{
-			pos++;
-			return {TokenType::RBRACE, "}", 0};
-		}
-		if (currentChar == '(')
-		{
-			pos++;
-			return {TokenType::LPAREN, "(", 0};
-		}
-		if (currentChar == ')')
-		{
-			pos++;
-			return {TokenType::RPAREN, ")", 0};
-		}
-		if (currentChar == ';')
-		{
-			pos++;
-			return {TokenType::SEMICOLON, ";", 0};
-		}
-		if (currentChar == '+')
-		{
-			pos++;
-			return {TokenType::PLUS, "+", 0};
-		}
-		if (currentChar == '-')
-		{
-			pos++;
-			return {TokenType::MINUS, "-", 0};
-		}
-		if (currentChar == '=')
-		{
-			pos++;
-			return {TokenType::EQUAL, "=", 0};
-		}
-
-		// Number.
-		if (isdigit(currentChar))
-		{
-			int start = pos;
-			while (pos < input.size() && isdigit(input[pos]))
-				pos++;
-			int num = stoi(input.substr(start, pos - start));
-			return {TokenType::NUMBER, input.substr(start, pos - start), num};
-		}
-
-		// Identifier or reserved word "if".
-		if (isalpha(currentChar) || currentChar == '_')
-		{
-			int start = pos;
-			while (pos < input.size() && (isalnum(input[pos]) || input[pos] == '_'))
-				pos++;
-			string word = input.substr(start, pos - start);
-			if (word == "if")
-				return {TokenType::IF, word, 0};
-			return {TokenType::IDENT, word, 0};
-		}
-
-		throw runtime_error(string("Unexpected character: ") + currentChar);
-	}
-
-	// Peek at the next token without consuming it.
-	Token peekToken()
-	{
-		size_t tempPos = pos;
-		Token token = getNextToken();
-		pos = tempPos;
-		return token;
-	}
-
 private:
+	std::string input;
+	size_t position;
+	int line;
+	int column;
+
+	char current() const
+	{
+		return position < input.length() ? input[position] : '\0';
+	}
+
+	void advance()
+	{
+		if (current() == '\n')
+		{
+			line++;
+			column = 1;
+		}
+		else
+		{
+			column++;
+		}
+		position++;
+	}
+
 	void skipWhitespace()
 	{
-		while (pos < input.size() && isspace(input[pos]))
-			pos++;
+		while (isspace(current()))
+		{
+			advance();
+		}
 	}
-	string input;
-	size_t pos;
-};
 
-//---------------------------//
-//       AST Declarations    //
-//---------------------------//
-
-// Environment for variable storage.
-using Env = unordered_map<string, int>;
-
-// Base class for expressions.
-struct Expr
-{
-	virtual ~Expr() {}
-	virtual int evaluate(Env &env) const = 0;
-};
-
-struct NumberExpr : public Expr
-{
-	int value;
-	NumberExpr(int value) : value(value) {}
-	int evaluate(Env &env) const override
+	Token number()
 	{
-		return value;
+		std::string result;
+		while (isdigit(current()))
+		{
+			result += current();
+			advance();
+		}
+		return {TokenType::NUMBER, result, line, column};
 	}
-};
 
-struct VariableExpr : public Expr
-{
-	string name;
-	VariableExpr(const string &name) : name(name) {}
-	int evaluate(Env &env) const override
+	Token identifier()
 	{
-		if (env.find(name) == env.end())
-			throw runtime_error("Undefined variable: " + name);
-		return env[name];
-	}
-};
+		std::string result;
+		while (isalnum(current()) || current() == '_')
+		{
+			result += current();
+			advance();
+		}
 
-struct BinaryExpr : public Expr
-{
-	char op; // '+' or '-'
-	unique_ptr<Expr> left, right;
-	BinaryExpr(char op, unique_ptr<Expr> left, unique_ptr<Expr> right)
-		: op(op), left(move(left)), right(move(right)) {}
-	int evaluate(Env &env) const override
+		if (result == "if")
+			return {TokenType::IF, result, line, column};
+		if (result == "then")
+			return {TokenType::THEN, result, line, column};
+		if (result == "else")
+			return {TokenType::ELSE, result, line, column};
+		if (result == "endif")
+			return {TokenType::ENDIF, result, line, column};
+
+		return {TokenType::IDENTIFIER, result, line, column};
+	}
+
+public:
+	Lexer(const std::string &text) : input(text), position(0), line(1), column(1) {}
+
+	Token nextToken()
 	{
-		int l = left->evaluate(env);
-		int r = right->evaluate(env);
-		if (op == '+')
-			return l + r;
-		if (op == '-')
-			return l - r;
-		throw runtime_error("Unknown operator");
+		skipWhitespace();
+
+		if (position >= input.length())
+		{
+			return {TokenType::END, "", line, column};
+		}
+
+		char c = current();
+
+		if (isdigit(c))
+		{
+			return number();
+		}
+
+		if (isalpha(c))
+		{
+			return identifier();
+		}
+
+		advance();
+
+		switch (c)
+		{
+		case '+':
+			return {TokenType::PLUS, "+", line, column};
+		case '-':
+			return {TokenType::MINUS, "-", line, column};
+		case '*':
+			return {TokenType::MULTIPLY, "", line, column};
+		case '/':
+			return {TokenType::DIVIDE, "/", line, column};
+		case '=':
+			return {TokenType::ASSIGN, "=", line, column};
+		case '(':
+			return {TokenType::LPAREN, "(", line, column};
+		case ')':
+			return {TokenType::RPAREN, ")", line, column};
+		default:
+			throw std::runtime_error("Invalid character: " + std::string(1, c));
+		}
 	}
 };
 
-// Base class for statements.
-struct Statement
-{
-	virtual ~Statement() {}
-	virtual void execute(Env &env) const = 0;
-};
-
-struct AssignmentStmt : public Statement
-{
-	string var;
-	unique_ptr<Expr> expr;
-	AssignmentStmt(const string &var, unique_ptr<Expr> expr)
-		: var(var), expr(move(expr)) {}
-	void execute(Env &env) const override
-	{
-		env[var] = expr->evaluate(env);
-	}
-};
-
-struct IfStmt : public Statement
-{
-	unique_ptr<Expr> condition;
-	unique_ptr<Statement> stmt;
-	IfStmt(unique_ptr<Expr> condition, unique_ptr<Statement> stmt)
-		: condition(move(condition)), stmt(move(stmt)) {}
-	void execute(Env &env) const override
-	{
-		if (condition->evaluate(env) != 0)
-			stmt->execute(env);
-	}
-};
-
-struct CompoundStmt : public Statement
-{
-	vector<unique_ptr<Statement>> statements;
-	void execute(Env &env) const override
-	{
-		for (auto &stmt : statements)
-			stmt->execute(env);
-	}
-};
-
-//---------------------------//
-//         Parser            //
-//---------------------------//
-
+// Parser class
 class Parser
 {
-public:
-	Parser(Lexer &lexer) : lexer(lexer)
-	{
-		current = lexer.getNextToken();
-	}
-
-	// Parse a program: Prog -> { Deyimler } END.
-	unique_ptr<CompoundStmt> parseProgram()
-	{
-		auto program = make_unique<CompoundStmt>();
-		eat(TokenType::LBRACE);
-		while (current.type == TokenType::IDENT || current.type == TokenType::IF)
-		{
-			program->statements.push_back(parseStatement());
-		}
-		eat(TokenType::RBRACE);
-		if (current.type != TokenType::END)
-		{
-			throw runtime_error("Expected end of input");
-		}
-		return program;
-	}
-
 private:
-	Lexer &lexer;
-	Token current;
+	Lexer lexer;
+	Token currentToken;
 
 	void eat(TokenType type)
 	{
-		if (current.type == type)
-			current = lexer.getNextToken();
-		else
-			throw runtime_error("Unexpected token: " + current.text);
-	}
-
-	// Statement: Deyim -> id = Exp ; | if ( Exp ) Deyim
-	unique_ptr<Statement> parseStatement()
-	{
-		if (current.type == TokenType::IDENT)
+		if (currentToken.type == type)
 		{
-			string varName = current.text;
-			eat(TokenType::IDENT);
-			eat(TokenType::EQUAL);
-			auto expr = parseExpr();
-			eat(TokenType::SEMICOLON);
-			return make_unique<AssignmentStmt>(varName, move(expr));
-		}
-		else if (current.type == TokenType::IF)
-		{
-			eat(TokenType::IF);
-			eat(TokenType::LPAREN);
-			auto condition = parseExpr();
-			eat(TokenType::RPAREN);
-			auto stmt = parseStatement();
-			return make_unique<IfStmt>(move(condition), move(stmt));
+			currentToken = lexer.nextToken();
 		}
 		else
 		{
-			throw runtime_error("Unexpected token in statement: " + current.text);
+			throw std::runtime_error("Unexpected token: " + currentToken.value);
 		}
 	}
 
-	// Expression: Exp -> term expt
-	unique_ptr<Expr> parseExpr()
+	std::shared_ptr<ASTNode> factor()
 	{
-		auto left = parseTerm();
-		return parseExpt(move(left));
-	}
+		Token token = currentToken;
 
-	// Expt -> + Exp | - Exp | epsilon
-	unique_ptr<Expr> parseExpt(unique_ptr<Expr> left)
-	{
-		if (current.type == TokenType::PLUS || current.type == TokenType::MINUS)
+		if (token.type == TokenType::NUMBER)
 		{
-			char op = (current.type == TokenType::PLUS) ? '+' : '-';
-			eat(current.type);
-			auto right = parseExpr();
-			auto bin = make_unique<BinaryExpr>(op, move(left), move(right));
-			return bin;
-		}
-		// epsilon production: just return left
-		return left;
-	}
-
-	// term -> NUMBER | IDENT
-	unique_ptr<Expr> parseTerm()
-	{
-		if (current.type == TokenType::NUMBER)
-		{
-			int num = current.value;
 			eat(TokenType::NUMBER);
-			return make_unique<NumberExpr>(num);
+			return std::make_shared<NumberNode>(std::stoi(token.value));
 		}
-		else if (current.type == TokenType::IDENT)
+
+		if (token.type == TokenType::IDENTIFIER)
 		{
-			string varName = current.text;
-			eat(TokenType::IDENT);
-			return make_unique<VariableExpr>(varName);
+			std::string name = token.value;
+			eat(TokenType::IDENTIFIER);
+			return std::make_shared<VariableNode>(name);
 		}
-		throw runtime_error("Expected NUMBER or IDENT in term, got: " + current.text);
+
+		if (token.type == TokenType::LPAREN)
+		{
+			eat(TokenType::LPAREN);
+			auto node = expr();
+			eat(TokenType::RPAREN);
+			return node;
+		}
+
+		throw std::runtime_error("Invalid factor");
+	}
+
+	std::shared_ptr<ASTNode> term()
+	{
+		auto node = factor();
+
+		while (currentToken.type == TokenType::MULTIPLY ||
+			   currentToken.type == TokenType::DIVIDE)
+		{
+			Token token = currentToken;
+			if (token.type == TokenType::MULTIPLY)
+			{
+				eat(TokenType::MULTIPLY);
+			}
+			else
+			{
+				eat(TokenType::DIVIDE);
+			}
+			node = std::make_shared<BinaryOpNode>(node, token.type, factor());
+		}
+
+		return node;
+	}
+
+	std::shared_ptr<ASTNode> expr()
+	{
+		auto node = term();
+
+		while (currentToken.type == TokenType::PLUS ||
+			   currentToken.type == TokenType::MINUS)
+		{
+			Token token = currentToken;
+			if (token.type == TokenType::PLUS)
+			{
+				eat(TokenType::PLUS);
+			}
+			else
+			{
+				eat(TokenType::MINUS);
+			}
+			node = std::make_shared<BinaryOpNode>(node, token.type, term());
+		}
+
+		return node;
+	}
+
+	std::shared_ptr<ASTNode> statement()
+	{
+		if (currentToken.type == TokenType::IF)
+		{
+			return ifStatement();
+		}
+
+		if (currentToken.type == TokenType::IDENTIFIER)
+		{
+			std::string name = currentToken.value;
+			eat(TokenType::IDENTIFIER);
+
+			if (currentToken.type == TokenType::ASSIGN)
+			{
+				eat(TokenType::ASSIGN);
+				auto value = expr();
+				return std::make_shared<AssignmentNode>(name, value);
+			}
+
+			return std::make_shared<VariableNode>(name);
+		}
+
+		return expr();
+	}
+
+	std::shared_ptr<ASTNode> ifStatement()
+	{
+		eat(TokenType::IF);
+		auto condition = expr();
+		eat(TokenType::THEN);
+		auto thenBranch = statement();
+
+		std::shared_ptr<ASTNode> elseBranch = nullptr;
+		if (currentToken.type == TokenType::ELSE)
+		{
+			eat(TokenType::ELSE);
+			elseBranch = statement();
+		}
+
+		eat(TokenType::ENDIF);
+		return std::make_shared<IfNode>(condition, thenBranch, elseBranch);
+	}
+
+public:
+	Parser(const std::string &text) : lexer(text)
+	{
+		currentToken = lexer.nextToken();
+	}
+
+	std::shared_ptr<ASTNode> parse()
+	{
+		return statement();
+	}
+
+	int evaluate(std::shared_ptr<ASTNode> node)
+	{
+		return node->evaluate();
 	}
 };
 
-//---------------------------//
-//           Main            //
-//---------------------------//
-
-int main(int argc, char *argv[])
+int main()
 {
-	string input;
-	if (argc >= 2)
-	{
-		input = argv[1];
-	}
-	else
-	{
-		cout << "Enter program:\n";
-		getline(cin, input);
-	}
-
 	try
 	{
-		Lexer lexer(input);
-		Parser parser(lexer);
-		auto programAST = parser.parseProgram();
+		std::string input;
+		std::cout << "Enter expression: ";
+		std::getline(std::cin, input);
 
-		Env env;
-		programAST->execute(env);
+		Parser parser(input);
+		auto ast = parser.parse();
+		int result = parser.evaluate(ast);
 
-		cout << "Final variables:\n";
-		for (auto &kv : env)
-		{
-			cout << kv.first << " = " << kv.second << "\n";
-		}
+		std::cout << "Result: " << result << std::endl;
 	}
-	catch (const exception &ex)
+	catch (const std::exception &e)
 	{
-		cerr << "Error: " << ex.what() << "\n";
-		return 1;
+		std::cout << "Error: " << e.what() << std::endl;
 	}
+
 	return 0;
 }
